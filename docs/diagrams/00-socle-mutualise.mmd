@@ -1,0 +1,39 @@
+flowchart TB
+  subgraph ACC["Compte AWS IA (existant) - eu-west-1"]
+    direction TB
+    subgraph SHARED["SOCLE MUTUALISÉ  -  tag UseCase=shared  (coût réparti par Cost Categories)"]
+      direction LR
+      NET["VPC privé<br/>VPC endpoints : bedrock-runtime,<br/>bedrock-agent-runtime, s3, kms, logs, sts"]
+      SEC["IAM Identity Center<br/>1 permission set / use-case<br/>Bedrock Guardrails<br/>Tag Policy + Config rules"]
+      LIB["Composants réutilisables<br/>lib Python 'agents-core' (GitLab registry)<br/>Lambda layer + image ECR de base<br/>wrapper Bedrock, LangGraph, A2A/MCP, évals"]
+      CI["GitLab CI templates<br/>fmt, tflint, checkov, tests, deploy"]
+      SMD["SageMaker Domain unique<br/>arrêt auto des apps inactives"]
+      FIN["FinOps : Budgets, Cost Anomaly Detection,<br/>Cost Explorer / CUR group by UseCase"]
+    end
+
+    subgraph UC1["Module usecase-baseline : uc01-agents-lab"]
+      direction TB
+      U1A["Tags obligatoires"]
+      U1B["KMS CMK + S3 bucket"]
+      U1C["Rôle IAM workload (ABAC)"]
+      U1D["Bedrock Application Inference Profiles<br/>(1 par modèle)"]
+      U1E["AWS Budget"]
+    end
+
+    subgraph UC2["Module usecase-baseline : uc02-hydraulic-schema"]
+      direction TB
+      U2A["Tags obligatoires"]
+      U2B["KMS CMK + S3 bucket"]
+      U2C["Rôle IAM workload (ABAC)"]
+      U2D["Bedrock Application Inference Profiles"]
+      U2E["AWS Budget"]
+    end
+
+    subgraph UCN["Module usecase-baseline : uc0N-... (prochaine demande)"]
+      UNA["même module, ~30 lignes de Terraform"]
+    end
+  end
+
+  SHARED --> UC1
+  SHARED --> UC2
+  SHARED --> UCN

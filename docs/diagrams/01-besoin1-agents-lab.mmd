@@ -1,0 +1,68 @@
+flowchart LR
+  subgraph SRC["Données publiques uniquement"]
+    HF["HuggingFace datasets<br/>benchmarks publics"]
+    AO["Appels d'offres publics<br/>TED, BOAMP, open data"]
+  end
+
+  subgraph ENTRY["Déclencheurs"]
+    SCH["EventBridge Scheduler<br/>scouting quotidien"]
+    API["API Gateway privée<br/>+ IAM / SSO"]
+    TST["GitLab CI<br/>tests de non-régression"]
+  end
+
+  subgraph VPC["VPC privé  -  UseCase=uc01-agents-lab"]
+    direction TB
+    SFN["Step Functions<br/>orchestration, retries,<br/>jobs > 15 min, campagnes d'évals"]
+
+    subgraph AG["Agents LangGraph sur Lambda"]
+      SUP["Superviseur<br/>routage / plan"]
+      SC["Agent Scout<br/>collecte + filtre"]
+      AN["Agent Analyste<br/>scoring Go / No-Go"]
+      RD["Agent Rédacteur<br/>fiche de synthèse"]
+    end
+
+    subgraph PROTO["Protocoles"]
+      A2A["A2A<br/>agent - agent"]
+      MCP["MCP servers<br/>outils : web fetch, S3, recherche"]
+    end
+
+    DDB[("DynamoDB<br/>checkpointer + mémoire")]
+    EV["Lambda Évaluateur<br/>LLM-as-judge + métriques"]
+  end
+
+  subgraph BR["Amazon Bedrock"]
+    HK["Claude Haiku (défaut MVP)<br/>via Inference Profile uc01"]
+    ALT["1-2 modèles comparés<br/>via Inference Profile uc01"]
+    GR["Guardrails"]
+  end
+
+  subgraph WM["Labo World Models"]
+    NB["SageMaker Studio<br/>JupyterLab, arrêt auto"]
+    TJ["Training / Processing Jobs<br/>Spot, GPU à la demande"]
+    MLF["MLflow managé<br/>suivi expériences"]
+  end
+
+  S3[("S3 uc01 : raw / curated /<br/>results / evals / models<br/>SSE-KMS CMK uc01")]
+  OUT["Sorties : SNS mail,<br/>rapport S3, QuickSight"]
+
+  HF --> S3
+  SCH --> SFN
+  API --> SFN
+  TST --> SFN
+  SFN --> SUP
+  SUP <--> A2A
+  A2A <--> SC & AN & RD
+  SC --> MCP
+  MCP --> AO
+  SUP --- DDB
+  SUP & SC & AN & RD --> HK
+  SFN --> EV
+  EV --> ALT
+  HK --- GR
+  RD --> S3
+  EV --> S3
+  S3 <--> NB
+  NB --> TJ
+  TJ --> MLF
+  TJ --> S3
+  S3 --> OUT

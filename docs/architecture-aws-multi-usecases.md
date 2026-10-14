@@ -1,275 +1,225 @@
-# Architecture AWS – Plateforme IA multi-use-cases (RAG / LangGraph / GraphRAG)
+# Plateforme IA AWS multi-use-cases – architecture, tagging et chiffrage
 
-> Hypothèse : les deux repos locaux (`trends-analysis`, `langgraph-agents`) n'étaient pas accessibles
-> depuis cette session ; l'architecture ci-dessous part des besoins décrits et réutilise le pattern
-> « Lambda + LangGraph + Bedrock + S3 » déjà en place. À confronter avec le code existant.
+**Contexte.** Un compte AWS héberge déjà deux projets (`trends-analysis` : RAG, `langgraph-agents` : LangGraph).
+De nouvelles demandes RAG / agents arrivent sur le même compte, portées par des métiers différents qu'il faut
+pouvoir **refacturer séparément**.
 
-Sommaire : 1. Principe d'optimisation · 2. Besoin 1 · 3. Besoin 2 · 4. Tagging · 5. Chiffrement · 6. Coûts / garde-fous · 7. Plan de mise en œuvre
+> Les deux repos existants n'étaient pas accessibles depuis cette session : l'architecture reprend le
+> pattern « Lambda + LangGraph + Bedrock + S3 » décrit, et reste à aligner avec leur code.
 
----
+| # | Demande | Identifiant proposé |
+|---|---|---|
+| 1 | Prototypage IA : multi-agents (A2A / MCP), world models, scouting d'appels d'offres | `uc01-agents-lab` |
+| 2 | Génération de schéma hydraulique : fiche de besoin → JSON → CAO, puis RAG / GraphRAG | `uc02-hydraulic-schema` |
 
-## 1. Principe : « socle commun + enveloppe par use-case »
-
-Chaque nouvelle demande métier = **un module Terraform `usecase-baseline`** instancié avec un nom
-(`uc01-agents-lab`, `uc02-hydraulic-schema`, `uc03-...`). Le module crée **toujours** les mêmes
-briques d'isolation, et le reste (Bedrock, Lambda, Neptune, SageMaker…) se branche dessus.
-
-```mermaid
-flowchart TB
-  subgraph SHARED["SOCLE MUTUALISÉ (1 fois, géré par toi)"]
-    direction LR
-    VPC["VPC privé + VPC endpoints<br/>bedrock-runtime, s3, kms, logs, neptune"]
-    GR["Bedrock Guardrails<br/>+ liste des modèles autorisés"]
-    LIB["Lib interne agents<br/>(Lambda layer / package GitLab)<br/>LangGraph, A2A, MCP, evals"]
-    CI["GitLab CI templates<br/>tflint, checkov, tests serverless"]
-    OBS["CloudWatch / X-Ray / Budgets<br/>+ Cost Explorer par tag"]
-    SM["SageMaker Domain unique<br/>1 user-profile par use-case"]
-  end
-
-  subgraph UC1["ENVELOPPE uc01-agents-lab"]
-    K1["KMS CMK uc01"]
-    R1["IAM roles (ABAC UseCase=uc01)"]
-    S1["S3 bucket uc01"]
-    P1["Bedrock Inference Profile uc01<br/>(coût par modèle par use-case)"]
-    X1["Lambda / Step Functions / DynamoDB"]
-  end
-
-  subgraph UC2["ENVELOPPE uc02-hydraulic-schema"]
-    K2["KMS CMK uc02"]
-    R2["IAM roles (ABAC UseCase=uc02)"]
-    S2["S3 bucket uc02"]
-    P2["Bedrock Inference Profile uc02"]
-    X2["Step Functions / KB / Neptune Analytics"]
-  end
-
-  subgraph UCN["ENVELOPPE uc0N ... (nouvelle demande)"]
-    KN["même module Terraform"]
-  end
-
-  SHARED --> UC1
-  SHARED --> UC2
-  SHARED --> UCN
-```
-
-**Ce qu'on mutualise** (économie + cohérence) : VPC/endpoints, guardrails, bibliothèque LangGraph/agents,
-templates CI, domaine SageMaker, dashboards, politique de tags.
-**Ce qu'on isole** (sécurité + refacturation) : clé KMS, rôles IAM, bucket S3, inference profile Bedrock,
-base graphe, logs. Aucune donnée ni clé partagée entre use-cases métiers.
+Sommaire : [1. Socle + enveloppes](#1-optimiser--un-socle-mutualisé-et-une-enveloppe-par-use-case) ·
+[2. Besoin 1](#2-besoin-1--uc01-agents-lab) · [3. Besoin 2](#3-besoin-2--uc02-hydraulic-schema) ·
+[4. Tagging et refacturation](#4-tagging-et-refacturation) · [5. Chiffrage](#5-chiffrage-mensuel-estimé) ·
+[6. Sécurité](#6-sécurité-devsecops) · [7. Plan](#7-plan-de-mise-en-œuvre)
 
 ---
 
-## 2. Besoin 1 – Plateforme prototypage : multi-agents, protocoles, world models
+## 1. Optimiser : un socle mutualisé et une enveloppe par use-case
 
-Données : publiques / open source uniquement (HuggingFace, benchmarks) ; évolution possible vers S3 ENGIE.
+![Socle mutualisé](diagrams/00-socle-mutualise.png)
 
-```mermaid
-flowchart LR
-  subgraph SRC["Sources publiques"]
-    HF["HuggingFace datasets / benchmarks"]
-    PUB["Appels d'offres publics<br/>TED, BOAMP, sites open data"]
-  end
+Chaque nouvelle demande = **un bloc `module "usecase-baseline"`** (≈ 30 lignes, voir `terraform/live/main.tf`).
+Le module crée toujours la même enveloppe : tags, CMK KMS, bucket S3, rôle IAM ABAC,
+**Application Inference Profiles Bedrock** et budget. Les services propres au besoin (Step Functions, KB,
+Neptune…) se branchent dessus et héritent des tags via `module.<uc>.tags`.
 
-  subgraph TRIG["Déclencheurs"]
-    EB["EventBridge Scheduler<br/>(scouting périodique)"]
-    APIGW["API Gateway + Cognito/SSO<br/>(appel manuel / demo)"]
-  end
+| Mutualisé (construit une fois) | Isolé par use-case |
+|---|---|
+| VPC + VPC endpoints (réutiliser ceux des projets existants) | Clé KMS, bucket S3, logs |
+| Guardrails Bedrock, Tag Policy, Config rules | Rôle IAM workload (ABAC `UseCase`) |
+| Lib interne `agents-core` (wrapper Bedrock, graphes LangGraph génériques, adaptateurs A2A/MCP, harness d'éval) | Inference profiles Bedrock (coût Bedrock ventilé) |
+| Templates GitLab CI (fmt, tflint, checkov, tests, deploy) | Knowledge Base, base graphe, DynamoDB |
+| Domaine SageMaker unique, 1 user profile / use-case | Budget + alertes |
+| Dashboards FinOps | Permission set IAM Identity Center |
 
-  subgraph ORCH["Orchestration serverless (VPC)"]
-    SFN["Step Functions<br/>workflows longs > 15 min<br/>+ tests automatisés"]
-    subgraph MA["Lambda LangGraph – multi-agents"]
-      SUP["Agent Superviseur"]
-      A1["Agent Scout<br/>collecte + filtrage"]
-      A2["Agent Analyste<br/>scoring pertinence"]
-      A3["Agent Rédacteur<br/>synthèse / fiche"]
-    end
-    CP[("DynamoDB<br/>checkpointer LangGraph<br/>mémoire des agents")]
-  end
-
-  subgraph PROTO["Communication agents"]
-    A2A["Protocole A2A<br/>agent-à-agent"]
-    MCP["Serveurs MCP<br/>outils : web, S3, DB"]
-  end
-
-  subgraph LLM["Modèles"]
-    BR["Bedrock Converse API<br/>Claude Haiku (MVP) + 1-2 modèles à comparer"]
-    GRD["Guardrails"]
-  end
-
-  subgraph WM["Labo World Models"]
-    SMS["SageMaker Studio / Notebook<br/>(accès via domaine partagé)"]
-    TJ["Training Jobs on-demand<br/>Spot, petites instances GPU"]
-    MLF["MLflow managé<br/>suivi des expériences"]
-  end
-
-  S3[("S3 uc01<br/>raw / curated / results / models<br/>SSE-KMS CMK uc01")]
-  OUT["Résultats : SNS email, dashboard,<br/>export JSON/CSV"]
-
-  HF --> S3
-  PUB --> A1
-  EB --> SFN
-  APIGW --> SFN
-  SFN --> SUP
-  SUP <--> A2A
-  A2A <--> A1
-  A2A <--> A2
-  A2A <--> A3
-  A1 <--> MCP
-  SUP --> CP
-  SUP & A1 & A2 & A3 --> BR
-  BR --- GRD
-  A1 --> S3
-  A3 --> S3
-  S3 --> SMS
-  SMS --> TJ
-  TJ --> MLF
-  TJ --> S3
-  S3 --> OUT
-```
-
-Points clés :
-- **Lambda** pour chaque agent/nœud ; **Step Functions** autour pour dépasser les 15 min, faire les retries et
-  exécuter les **tests/évals serverless** (jeu de cas de test → agents → score → rapport S3).
-- **A2A** (agent↔agent) et **MCP** (agent↔outils) exposés derrière des Lambda (Function URL / API GW privée).
-  Alternative à évaluer plus tard : Bedrock AgentCore (runtime, gateway, mémoire managés).
-- **Bedrock Haiku** par défaut ; changement de modèle = paramètre du module, pas de code.
-- **World models** : pas de GPU permanent. Notebooks arrêtés automatiquement (idle shutdown), Training
-  Jobs en Spot, modèles pré-existants d'abord ; dimensionnement GPU décidé après mesure sur petite échelle.
-- **Composants réutilisables** : tout ce qui est dans `LIB` (graphes LangGraph génériques, wrapper Bedrock,
-  adaptateur A2A/MCP, harness d'évaluation) est publié dans le registre GitLab et consommé par les autres use-cases.
+Gain : un nouveau besoin se déploie en jours au lieu de semaines, les contrôles sécurité sont identiques
+partout, et le coût du socle est réparti au lieu d'être dupliqué.
 
 ---
 
-## 3. Besoin 2 – Génération de schéma d'ingénierie hydraulique (LLM → JSON → CAO)
+## 2. Besoin 1 – `uc01-agents-lab`
 
-```mermaid
-flowchart LR
-  USER["Ingénieur"] --> IN["Fiche de besoin<br/>puissance, fluide, heures..."]
-  IN --> S3IN[("S3 uc02/input<br/>SSE-KMS CMK uc02")]
+![Besoin 1 – agents lab](diagrams/01-besoin1-agents-lab.png)
 
-  subgraph NB["Dev : SageMaker Notebook (VPC, sans internet)"]
-    DEV["Python : pipeline, prompts,<br/>notebooks d'essai"]
-  end
+| Brique | Choix | Remarque |
+|---|---|---|
+| LLM | **Claude Haiku via Bedrock** (Converse API) + 1-2 modèles en comparaison | modèle = paramètre (ARN d'inference profile), pas du code |
+| Orchestration agents | **LangGraph dans Lambda**, un superviseur + agents spécialisés | réutilise le pattern `langgraph-agents` |
+| Workflows longs / tests | **Step Functions** autour des Lambda | dépasse la limite des 15 min, retries, campagnes d'évals |
+| Communication | **A2A** entre agents, **MCP** pour les outils | candidat à mettre dans `agents-core` |
+| Mémoire / état | **DynamoDB** (checkpointer LangGraph) | on-demand, quasi gratuit à petite échelle |
+| Déclencheurs | EventBridge Scheduler (scouting quotidien), API Gateway privée, GitLab CI | |
+| Évaluation | Lambda Évaluateur (LLM-as-judge + métriques), résultats S3 | rejouable en CI = « tests serverless » |
+| World models | **SageMaker Studio** + Training/Processing Jobs **Spot**, MLflow managé | GPU à la demande uniquement, pas d'instance permanente |
+| Données | HuggingFace / benchmarks / appels d'offres publics → S3 | `DataClassification=public` |
 
-  subgraph PIPE["Pipeline Step Functions"]
-    direction TB
-    V["1. Validation fiche<br/>(JSON schema)"]
-    RET["2. Retrieve<br/>règles hydrauliques + projets"]
-    GEN["3. Génération schéma JSON<br/>Map state : N modèles en parallèle"]
-    CHK["4. Contrôle règles métier<br/>(Lambda Python déterministe)"]
-    FIX{"Conforme ?"}
-    CAO["5. Conversion JSON → CAO<br/>(DXF via ezdxf, Lambda conteneur)"]
-    CMP["6. Comparaison modèles<br/>score règles, coût, latence"]
-    V --> RET --> GEN --> CHK --> FIX
-    FIX -- "non, max 3 itérations<br/>(erreurs renvoyées au LLM)" --> GEN
-    FIX -- oui --> CAO --> CMP
-  end
+Option à évaluer plus tard : **Bedrock AgentCore** (runtime, mémoire et gateway MCP managés) si
+les limites de Lambda gênent (sessions longues, streaming).
 
-  subgraph BRK["Bedrock"]
-    M1["Claude Sonnet"]
-    M2["Claude Haiku"]
-    M3["Amazon Nova / Llama<br/>(modèles du groupe)"]
-    KB["Knowledge Base<br/>règles + docs + projets de référence"]
-  end
+---
 
-  subgraph GRAPH["Phase 2 : GraphRAG"]
-    NA[("Neptune Analytics<br/>graphe équipements / connexions<br/>+ vecteurs")]
-  end
+## 3. Besoin 2 – `uc02-hydraulic-schema`
 
-  S3DOC[("S3 uc02/corpus<br/>règles, historique projets")]
-  S3OUT[("S3 uc02/output<br/>schema.json + .dxf + rapport")]
+![Besoin 2 – schéma hydraulique](diagrams/02-besoin2-schema-hydraulique.png)
 
-  S3IN --> V
-  GEN --> M1 & M2 & M3
-  RET --> KB
-  S3DOC --> KB
-  KB <--> NA
-  CAO --> S3OUT
-  CMP --> S3OUT
-  CAO -. "schémas validés<br/>enrichissent le graphe" .-> NA
-  DEV -.-> PIPE
-  DEV -.-> S3DOC
-```
+Le pipeline Step Functions :
+1. **Valide la fiche de besoin** (JSON Schema : puissance, fluide, heures de fonctionnement…).
+2. **Récupère** les règles hydrauliques et des projets similaires (Knowledge Base).
+3. **Génère le schéma JSON** avec N modèles en parallèle (`Map`), en sortie structurée (tool use) pour
+   garantir un JSON parsable.
+4. **Contrôle les règles métier** en Python déterministe (pas de LLM ici : c'est la vérité terrain).
+5. **Boucle de correction** : les violations sont renvoyées au LLM, 3 itérations maximum.
+6. **Convertit en CAO** : DXF via `ezdxf` dans une Lambda conteneur (convertisseur isolé, remplaçable
+   si un autre format est exigé).
+7. **Score comparatif** par modèle : % de règles respectées, nb d'itérations, coût, latence → S3.
 
-Choix recommandés (coût / simplicité) :
 | Besoin exprimé | Proposition | Pourquoi |
 |---|---|---|
-| Plusieurs modèles Bedrock | **Converse API** + `Map` Step Functions | un seul code, comparaison objective (règles respectées, tokens, latence) |
-| Notebook Python | **SageMaker Studio/Notebook** dans le domaine partagé, VPC only | accès Bedrock/S3/Neptune par endpoints privés |
-| Contrôle des règles | **Code déterministe** (pas de LLM) + boucle de correction | fiabilité ; les règles hydrauliques deviennent des tests réutilisables |
-| JSON → CAO | **DXF (ezdxf)** en premier, formats propriétaires ensuite | léger, scriptable ; convertisseur isolé = remplaçable |
-| KB / RAG | **Bedrock Knowledge Bases**, vector store **S3 Vectors** (MVP) | évite le coût plancher d'OpenSearch Serverless |
-| Graphe / GraphRAG | **Neptune Analytics** (intégré à Bedrock KB GraphRAG) en priorité ; **Neptune Database** seulement si besoin transactionnel/Gremlin | Analytics = création/suppression à la demande, pas de cluster à garder allumé |
+| Plusieurs modèles Bedrock | 1 inference profile par modèle (Sonnet, Haiku, Nova…) | comparaison objective + coût par modèle visible |
+| Environnement Python | SageMaker Notebook / Studio dans le domaine partagé, VPC sans internet | accès privé à Bedrock, S3, Neptune |
+| Stockage | S3 `uc02` : `input/`, `corpus/`, `output/` | une seule CMK, un seul bucket |
+| RAG | Bedrock Knowledge Bases, vecteurs **S3 Vectors** en phase 1 | évite le coût plancher d'OpenSearch Serverless (≈ 175–350 $/mois) |
+| Graphe + GraphRAG | **Neptune Analytics** (GraphRAG natif des Knowledge Bases) en phase 2 | **Neptune Database** seulement si un vrai besoin transactionnel apparaît |
 
-Phasage : **Phase 1** = Fiche + règles (KB simple) → JSON → CAO, sans graphe.
-**Phase 2** = ingestion de l'historique projets, bascule de la KB sur Neptune Analytics (GraphRAG).
-
----
-
-## 4. Tagging – une taxonomie obligatoire
-
-Appliquée via `default_tags` Terraform (impossible d'oublier) + **AWS Organizations Tag Policy** +
-**Config rule / SCP** refusant la création sans tags obligatoires.
-
-| Tag | Exemple | Obligatoire | Usage |
-|---|---|---|---|
-| `UseCase` | `uc02-hydraulic-schema` | oui | clé de refacturation + ABAC IAM |
-| `BusinessUnit` / `CostCenter` | `engie-xxx` | oui | refacturation vers le métier |
-| `Owner` | `prenom.nom` | oui | qui contacter |
-| `Environment` | `dev` / `test` | oui | séparation |
-| `DataClassification` | `public` / `internal` | oui | passe de `public` à `internal` quand on branche les données ENGIE |
-| `Phase` | `prototype` / `mvp` | oui | priorisation / nettoyage |
-| `ExpiryDate` | `2026-12-31` | prototypes | suppression automatique des ressources oubliées |
-| `ManagedBy` | `terraform` | oui | traçabilité |
-
-À faire côté facturation :
-1. **Activer les tags en « cost allocation tags »** (Billing console) – 24 h de délai.
-2. **Bedrock : utiliser des Application Inference Profiles taguées** (un par use-case et par modèle) ;
-   sans cela, les appels Bedrock ne sont pas ventilables par tag. Les appels passent par l'ARN du profil.
-3. **Un AWS Budget par `UseCase`** (alerte 80 % / 100 %) + Cost Anomaly Detection.
-4. Rapport CUR/Athena ou Cost Explorer groupé par `UseCase`.
+**Phasage** : Phase 1 = fiche + règles → JSON → DXF, sans graphe (valide la faisabilité au moindre coût).
+Phase 2 = ingestion de l'historique projets + GraphRAG sur Neptune Analytics.
 
 ---
 
-## 5. Chiffrement – une clé par use-case
+## 4. Tagging et refacturation
 
-| Couche | Mécanisme |
+### Taxonomie (imposée par le module, validée par Terraform)
+
+| Tag | Exemple | Rôle |
+|---|---|---|
+| `UseCase` | `uc02-hydraulic-schema` | **clé de refacturation** + ABAC IAM/KMS |
+| `BusinessUnit` | entité métier | à qui on refacture |
+| `CostCenter` | centre de coût | imputation comptable |
+| `Owner` | prenom.nom | contact |
+| `Environment` | `dev` / `test` / `prod` | |
+| `DataClassification` | `public` → `internal` | passage aux données ENGIE = changement contrôlé |
+| `Phase` | `prototype` / `mvp` / `run` | |
+| `ExpiryDate` | `2027-06-30` | nettoyage des prototypes oubliés |
+| `ManagedBy` | `terraform` | |
+
+### Ce qui rend la refacturation réellement exploitable
+
+1. **Activer `UseCase`, `BusinessUnit`, `CostCenter` comme *cost allocation tags*** (Billing → Cost allocation
+   tags). Effet sous ~24 h, **non rétroactif** : à faire avant de démarrer.
+2. **Bedrock : passer par les Application Inference Profiles tagués.** Un appel Bedrock fait avec un
+   `modelId` brut n'est pas attribuable à un use-case. Le code appelle l'ARN du profil
+   (`output inference_profile_arns`) ; la politique IAM du module **interdit** d'appeler un modèle autrement.
+3. **Coûts partagés** (VPC endpoints, Config, CloudWatch du socle) taggés `UseCase=shared`, puis répartis via
+   **AWS Cost Categories – split charge rules** (proportionnel à la conso de chaque use-case ou fixe).
+4. **Un AWS Budget par use-case** (alertes 80 % réel / 100 % prévisionnel) + **Cost Anomaly Detection** sur la
+   dimension `UseCase`.
+5. **Les tags sont imposés** : Tag Policy (Organizations) + règle Config `required-tags`, et un job de CI qui
+   refuse un `terraform plan` créant une ressource sans `UseCase`.
+6. Points d'attention : vérifier la propagation des tags SageMaker (domaine → user profile → apps/jobs)
+   et taguer explicitement les Training Jobs ; les transferts de données et certains frais
+   (support, taxes) ne sont pas taggables et restent dans `shared`.
+
+Requête de suivi type (CUR 2.0 / Athena) :
+```sql
+SELECT resource_tags['user_use_case'] AS use_case,
+       product['product_name']        AS service,
+       ROUND(SUM(line_item_unblended_cost), 2) AS cost_usd
+FROM   cur2
+WHERE  billing_period = '2026-10'
+GROUP  BY 1, 2
+ORDER  BY 1, 3 DESC;
+```
+
+---
+
+## 5. Chiffrage mensuel estimé
+
+> Ordres de grandeur sur tarifs publics on-demand (USD, HT), à recalculer avec l'AWS Pricing Calculator
+> pour eu-west-1 et les modèles réellement ouverts sur le compte. Hypothèses de volume indiquées : c'est elles
+> qu'il faut faire valider par chaque métier.
+> Tarifs utilisés : Haiku ≈ 1 $ / 5 $ par M tokens (in/out), Sonnet ≈ 3 $ / 15 $, Nova Pro ≈ 0,8 $ / 3,2 $.
+
+### Socle mutualisé (`UseCase=shared`, réparti)
+| Poste | Hypothèse | $/mois approx. |
+|---|---|---|
+| VPC interface endpoints | 5 endpoints × 2 AZ (0 si ceux des projets existants sont réutilisés) | 80 – 90 |
+| Config, CloudWatch, KMS socle | | 10 – 20 |
+| **Total** | | **≈ 90 – 110** |
+
+### `uc01-agents-lab`
+| Poste | Hypothèse | $/mois approx. |
+|---|---|---|
+| Bedrock Haiku – scouting | 100 AO/jour × 4 appels agents × (4k in + 0,8k out) | ≈ 100 |
+| Bedrock – évals / comparaison | 500 cas/mois × 2 modèles + juge | 20 – 40 |
+| Lambda, Step Functions, DynamoDB, API GW | faible volume | < 10 |
+| S3 | 50 Go | ≈ 2 |
+| SageMaker Studio CPU | ml.t3.medium, 80 h | ≈ 5 |
+| GPU world models | ml.g5.xlarge, 40 h (Spot : −50 à −70 %) | 25 – 60 |
+| KMS, logs | | ≈ 5 |
+| **Total** | | **≈ 170 – 230** |
+
+### `uc02-hydraulic-schema`
+| Poste | Hypothèse | $/mois approx. |
+|---|---|---|
+| Bedrock – génération | 300 essais/mois × 3 modèles × 1,5 itération × (12k in + 3k out) ≈ 0,19 $/essai | ≈ 60 |
+| Knowledge Base + S3 Vectors + embeddings | corpus < 10 Go | < 10 |
+| SageMaker Notebook | ml.t3.medium – ml.m5.large, 160 h | 10 – 20 |
+| Lambda (dont conteneur DXF), Step Functions, S3 | | < 10 |
+| KMS, logs | | ≈ 5 |
+| **Total phase 1** | | **≈ 90 – 110** |
+| Neptune Analytics (phase 2) | plus petite capacité ≈ 0,5 $/h : 24/7 ≈ 350 $ ; heures ouvrées (supprimer / restaurer depuis snapshot) ≈ 90 $ | 90 – 350 |
+| Ingestion GraphRAG (extraction d'entités par LLM) | ponctuelle, selon taille du corpus | 10 – 50 / ingestion |
+| **Total phase 2** | | **≈ 200 – 500** |
+
+Les budgets du module (`monthly_budget_usd`) sont posés à 300 $ (uc01) et 400 $ (uc02) : à ajuster après
+validation des hypothèses.
+
+**Leviers d'optimisation** : Haiku par défaut et Sonnet seulement en comparaison ; *prompt caching* sur
+les longs blocs de règles (jusqu'à −90 % sur les tokens d'entrée mis en cache) ; Batch inference Bedrock
+(−50 %) pour les campagnes d'éval non urgentes ; `max_tokens` borné ; notebooks avec arrêt automatique ;
+Spot pour l'entraînement ; Neptune Analytics créé seulement en phase 2 ; job nocturne sur `ExpiryDate`.
+
+---
+
+## 6. Sécurité (DevSecOps)
+
+- **Une CMK KMS par use-case**, rotation annuelle, key policy ABAC : seuls les principals tagués
+  `UseCase=<uc>` déchiffrent. Un rôle d'un autre use-case aux droits S3 trop larges ne lit rien.
+- S3 : SSE-KMS + Bucket Keys, Block Public Access, TLS obligatoire, versioning.
+- **Neptune / Neptune Analytics, Knowledge Base, DynamoDB, SageMaker (volumes et sorties), Lambda (variables
+  d'env.), CloudWatch Logs** : chiffrés avec la CMK du use-case. Pour Neptune, la clé se choisit **à la
+  création** et n'est plus modifiable ensuite.
+- Réseau : tout en VPC privé, accès AWS par PrivateLink ; notebooks sans accès internet direct.
+- IAM : rôle workload unique par use-case, Bedrock limité aux inference profiles du use-case,
+  permissions boundary optionnelle ; humains via IAM Identity Center (1 permission set / use-case).
+- Guardrails Bedrock (filtres de contenu, PII) ; pas de prompts sensibles en clair dans les logs ; rétention bornée.
+- **Passage `public` → `internal`** (données ENGIE sur S3) : changement de tag + revue (classification,
+  DPO si données personnelles), jamais un simple upload.
+- CI : `terraform fmt/validate`, `tflint`, `checkov`, scan des dépendances Python (`pip-audit`), scan d'image ECR.
+
+---
+
+## 7. Plan de mise en œuvre
+
+1. Activer les cost allocation tags, Tag Policy et règles Config (**avant tout déploiement**).
+2. Socle : réutiliser VPC/endpoints existants, guardrails, domaine SageMaker, templates CI.
+3. Déployer `terraform/live` (module `usecase-baseline` pour uc01 et uc02) ; renseigner `BusinessUnit`,
+   `CostCenter`, `Owner` avec les métiers.
+4. Extraire des projets existants ce qui va dans `agents-core` (wrapper Bedrock sur inference profiles,
+   checkpointer, packaging Lambda) et le publier dans le registre GitLab.
+5. `uc02` phase 1 : pipeline Step Functions + moteur de règles + DXF + comparaison de modèles.
+6. `uc01` : agents scouting + A2A/MCP + harness d'évals ; labo world models.
+7. Revue de coûts à M+1 par use-case, puis `uc02` phase 2 (Knowledge Base historique + Neptune Analytics).
+
+## Fichiers
+
+| Chemin | Contenu |
 |---|---|
-| S3 | SSE-KMS avec **CMK du use-case**, Bucket Keys activées, policy refusant `PutObject` sans chiffrement et tout accès non-TLS, Block Public Access |
-| Bedrock KB / vector store | clé KMS du use-case (KB, ingestion jobs, S3 Vectors / Neptune Analytics) |
-| Neptune / Neptune Analytics | chiffrement au repos avec CMK du use-case (**à définir à la création**, non modifiable après) |
-| DynamoDB (checkpoints), SQS, SNS | CMK du use-case |
-| SageMaker | `VolumeKmsKeyId` + `OutputKmsKeyId`, notebook en VPC, root access désactivé |
-| Lambda | variables d'environnement chiffrées KMS ; secrets dans Secrets Manager (CMK use-case) |
-| CloudWatch Logs | log groups chiffrés KMS, rétention limitée (pas de prompts sensibles en clair) |
-| Transit | TLS 1.2+, VPC endpoints (PrivateLink) pour Bedrock/S3/KMS |
-
-**Isolation par clé** : la key policy n'autorise que les rôles portant `aws:PrincipalTag/UseCase = <ce use-case>`
-(ABAC). Résultat : même si un rôle d'un autre use-case a des droits S3 trop larges, il ne peut pas déchiffrer.
-Chaque clé a un alias `alias/uc02-hydraulic-schema-dev`, rotation annuelle activée.
-
-Exemple prêt à l'emploi : `terraform/modules/usecase-baseline/`.
-
----
-
-## 6. Optimisation coûts et opérations
-
-- **Serverless + à la demande** partout : Lambda, Step Functions, Bedrock on-demand ; pas de ressource
-  permanente coûteuse (OpenSearch Serverless évité, Neptune Analytics supprimable/restaurable depuis snapshot).
-- **Notebooks / Studio** : arrêt auto sur inactivité (lifecycle config), un seul domaine SageMaker.
-- **Modèles** : Haiku par défaut ; Sonnet seulement dans la comparaison ; prompt caching Bedrock pour les
-  longs prompts de règles ; limiter `max_tokens`.
-- **`ExpiryDate`** + job nocturne qui alerte puis supprime les ressources de prototypes expirées.
-- **Un seul pipeline CI** (templates GitLab) : `terraform fmt/validate`, `tflint`, `checkov` (DevSecOps),
-  tests serverless Step Functions, déploiement par use-case via variable `use_case`.
-- **Accès** : ABAC (`UseCase`) plutôt qu'un rôle par personne ; SSO IAM Identity Center avec permission set par use-case.
-
----
-
-## 7. Plan de mise en œuvre (ordre conseillé)
-
-1. Socle : VPC endpoints, politique de tags, Budgets, domaine SageMaker, guardrails.
-2. Module `usecase-baseline` (KMS, S3, rôles ABAC, inference profiles, budget) – testé sur `uc01`.
-3. Reprendre dans la lib commune ce qui existe déjà dans `langgraph-agents` (wrapper Bedrock, checkpointer, déploiement Lambda).
-4. `uc02` Phase 1 : pipeline Step Functions + validation règles + DXF ; comparaison de modèles.
-5. `uc01` : agents scout/analyste + A2A/MCP ; labo world models dans SageMaker.
-6. `uc02` Phase 2 : Knowledge Base + Neptune Analytics (GraphRAG).
+| `docs/diagrams/*.mmd` / `*.png` | sources Mermaid et rendus des 3 schémas |
+| `terraform/modules/usecase-baseline/` | enveloppe par use-case (tags, KMS, S3, IAM ABAC, inference profiles, budget) |
+| `terraform/live/main.tf` | instanciation uc01 + uc02 (ARN de modèles à vérifier sur le compte) |

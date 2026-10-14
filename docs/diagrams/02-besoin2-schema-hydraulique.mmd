@@ -1,0 +1,47 @@
+flowchart LR
+  ING["Ingénieur"] -->|"fiche de besoin<br/>puissance, fluide, heures"| S3IN
+
+  subgraph VPC["VPC privé  -  UseCase=uc02-hydraulic-schema"]
+    direction TB
+    S3IN[("S3 uc02/input")]
+
+    subgraph SFN["Step Functions : pipeline de génération"]
+      direction TB
+      V["1. Valider la fiche<br/>JSON Schema"]
+      R["2. Retrieve<br/>règles hydrauliques<br/>+ projets similaires"]
+      G["3. Générer schéma JSON<br/>Map : N modèles en parallèle<br/>sortie structurée tool-use"]
+      C["4. Contrôle règles métier<br/>Python déterministe"]
+      D{"Conforme ?"}
+      X["5. JSON vers CAO<br/>DXF via ezdxf<br/>Lambda conteneur"]
+      M["6. Scoring comparatif<br/>% règles OK, coût, latence"]
+      V --> R --> G --> C --> D
+      D -->|"non : erreurs renvoyées<br/>au LLM, max 3 tours"| G
+      D -->|"oui"| X --> M
+    end
+
+    NB["SageMaker Notebook<br/>dev du pipeline<br/>sans accès internet"]
+    S3C[("S3 uc02/corpus<br/>règles, docs,<br/>historique projets")]
+    S3OUT[("S3 uc02/output<br/>schema.json, .dxf,<br/>rapport comparatif")]
+  end
+
+  subgraph BR["Amazon Bedrock  -  Inference Profiles uc02"]
+    M1["Claude Sonnet"]
+    M2["Claude Haiku"]
+    M3["Amazon Nova<br/>ou autre modèle du groupe"]
+    KB["Knowledge Base<br/>Phase 1 : vecteurs S3 Vectors<br/>Phase 2 : GraphRAG"]
+  end
+
+  subgraph GR["Phase 2 : graphe"]
+    NA[("Neptune Analytics<br/>équipements = noeuds<br/>connexions = arêtes")]
+  end
+
+  S3IN --> V
+  R --> KB
+  G --> M1 & M2 & M3
+  S3C -->|"ingestion"| KB
+  KB <-.->|"Phase 2"| NA
+  X --> S3OUT
+  M --> S3OUT
+  X -.->|"schémas validés<br/>enrichissent le graphe"| NA
+  NB -.-> SFN
+  NB -.-> NA
