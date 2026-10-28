@@ -19,12 +19,12 @@
 | Données | Publiques uniquement (HuggingFace, TED, BOAMP) | Fiches d'essai, règles hydrauliques, puis historique de projets |
 | Modèles Bedrock | 1 (Claude Haiku), + 1 en comparaison | 3 en parallèle (Sonnet, Haiku, Nova ou autre) |
 | Orchestration | Step Functions + agents LangGraph sur Lambda | Step Functions (pipeline en 6 étapes, boucle de correction) |
-| Déclenchement | Planifié (quotidien) + CI pour les tests | À la demande (dépôt d'une fiche dans S3) |
+| Déclenchement (dev) | Manuel (console / CLI) + CI pour les tests | Manuel (console / CLI, chemin de la fiche en entrée) |
 | Mémoire / état | DynamoDB (checkpoints LangGraph) | Aucun (pipeline sans état) |
 | RAG | Non | Oui – Bedrock Knowledge Base (phase 2) |
 | Graphe | Non | Oui – Neptune Analytics / GraphRAG (phase 3) |
 | Sortie | Synthèse par mail (SNS) + résultats S3 | `schema.json` + `.dxf` + rapport comparatif des modèles |
-| Nb de ressources à créer | ~20 | ~15 (phase 1), ~22 (avec phases 2 et 3) |
+| Nb de ressources à créer | ~18 | ~14 (phase 1), ~21 (avec phases 2 et 3) |
 | Coût estimé | **≈ 130 – 160 $/mois** | **≈ 75 $/mois** (phase 1) → **≈ 180 – 450 $/mois** (avec Neptune) |
 | Point ouvert | Calcul pour les world models (SageMaker exclu) | Environnement de dev : en local avec accès Bedrock |
 
@@ -34,7 +34,7 @@
 
 ![Besoin 1](diagrams/01-besoin1-agents-lab.png)
 
-**Fonctionnement :** chaque matin, EventBridge lance le workflow Step Functions. Le superviseur répartit le travail
+**Fonctionnement :** le workflow Step Functions est lancé manuellement (console ou CLI) pendant le dev. Le superviseur répartit le travail
 entre trois agents (A2A) : le scout collecte les appels d'offres publics via un serveur MCP, l'analyste les note,
 le rédacteur produit une synthèse envoyée par mail et stockée dans S3. Un second workflow rejoue un jeu de cas de
 test et note les réponses (LLM-as-judge), déclenché par la CI.
@@ -46,15 +46,14 @@ test et note les réponses (LLM-as-judge), déclenché par la CI.
 | Lambda | `uc01-supervisor`, `uc01-scout`, `uc01-analyst`, `uc01-writer` | 4 | Agents LangGraph |
 | Lambda | `uc01-mcp-tools` | 1 | Serveur MCP : outils web fetch, lecture/écriture S3 |
 | Lambda | `uc01-evaluator` | 1 | Évaluation automatique des réponses |
-| Step Functions | `sfn-uc01-scouting`, `sfn-uc01-evals` | 2 | Workflow quotidien + campagne de tests |
-| EventBridge Scheduler | `uc01-daily-scouting` | 1 | Déclenchement quotidien |
+| Step Functions | `sfn-uc01-scouting`, `sfn-uc01-evals` | 2 | Workflow de scouting + campagne de tests |
 | DynamoDB | `uc01-agent-checkpoints` (on-demand) | 1 | Mémoire / état des agents LangGraph |
 | Bedrock | Accès Claude Haiku (+ 1 modèle de comparaison) | 1–2 | LLM des agents |
 | Bedrock | Application inference profile tagué `uc01` | 1–2 | Rend le coût Bedrock attribuable au besoin |
 | Bedrock | Guardrail | 1 | Filtrage contenu / PII |
 | SNS | `uc01-notifications` | 1 | Envoi de la synthèse |
 | S3 | Préfixe `/uc01/` (raw, results, evals) | – | Dans le bucket partagé |
-| IAM | Rôle Lambda, rôle Step Functions, rôle Scheduler | 3 | Moindre privilège, limités au préfixe `/uc01/` |
+| IAM | Rôle Lambda, rôle Step Functions | 2 | Moindre privilège, limités au préfixe `/uc01/` |
 | CloudWatch | Log groups (rétention 30 j) + 1 alarme d'erreurs | ~7 | Supervision |
 | Budget | Budget filtré sur `UseCase=uc01-agents-lab` | 1 | Alerte coût |
 | **À définir** | Calcul world models | – | SageMaker exclu : à cadrer avec le demandeur |
@@ -65,7 +64,7 @@ test et note les réponses (LLM-as-judge), déclenché par la CI.
 |---|---|---|
 | Bedrock Haiku – scouting | 100 appels d'offres/jour × 4 appels × (4k in + 0,8k out) | ≈ 100 |
 | Bedrock – évaluations | 500 cas/mois × 2 modèles + juge | 20 – 40 |
-| Lambda, Step Functions, DynamoDB, Scheduler, SNS | faible volume | < 10 |
+| Lambda, Step Functions, DynamoDB, SNS | faible volume | < 10 |
 | S3, CloudWatch | | ≈ 5 |
 
 ---
@@ -74,7 +73,7 @@ test et note les réponses (LLM-as-judge), déclenché par la CI.
 
 ![Besoin 2](diagrams/02-besoin2-schema-hydraulique.png)
 
-**Fonctionnement :** l'ingénieur dépose une fiche de besoin dans S3. Le pipeline Step Functions la valide, récupère
+**Fonctionnement :** l'ingénieur dépose une fiche de besoin dans S3. Le pipeline Step Functions, lancé manuellement pendant le dev, la valide, récupère
 les règles hydrauliques, fait générer le schéma JSON par 3 modèles en parallèle, contrôle chaque résultat avec les
 règles métier (code Python, pas de LLM) et renvoie les erreurs au modèle jusqu'à 3 fois. Les schémas conformes sont
 convertis en DXF, puis un rapport compare les modèles (règles respectées, itérations, coût, latence).
@@ -92,7 +91,6 @@ convertis en DXF, puis un rapport compare les modèles (règles respectées, it�
 | Bedrock | Accès Sonnet, Haiku, Nova (ou modèles du groupe) | 3 | Comparaison des modèles |
 | Bedrock | Application inference profiles tagués `uc02` | 3 | Coût par modèle et par besoin |
 | S3 | Préfixes `/uc02/input`, `/uc02/corpus`, `/uc02/output` | – | Dans le bucket partagé |
-| EventBridge | Règle « objet créé dans `/uc02/input` » | 1 | Lance le pipeline au dépôt d'une fiche |
 | IAM | Rôle Lambda, rôle Step Functions | 2 | Limités au préfixe `/uc02/` |
 | CloudWatch | Log groups + alarme d'erreurs | ~8 | Supervision |
 | Budget | Budget filtré sur `UseCase=uc02-hydraulic-schema` | 1 | Alerte coût |
@@ -119,7 +117,7 @@ convertis en DXF, puis un rapport compare les modèles (règles respectées, it�
 | Poste | Hypothèse | $/mois |
 |---|---|---|
 | Bedrock – génération | 300 essais/mois × 3 modèles × 1,5 itération × (12k in + 3k out) | ≈ 60 |
-| Lambda, Step Functions, ECR, EventBridge | | < 10 |
+| Lambda, Step Functions, ECR | | < 10 |
 | S3, CloudWatch | | ≈ 5 |
 | **Total phase 1** | | **≈ 75** |
 | Knowledge Base + S3 Vectors + embeddings (phase 2) | corpus < 10 Go | < 10 |
@@ -168,7 +166,11 @@ convertis en DXF, puis un rapport compare les modèles (règles respectées, it�
 
 ## Ordre de mise en place
 
-1. **Besoin 1 – MVP** : Step Functions + superviseur, scout, rédacteur + DynamoDB + Scheduler (reprend le pattern
+> Phase de dev : pas d'EventBridge, les workflows sont lancés à la main
+> (`aws stepfunctions start-execution`) ou par la CI. Un déclencheur automatique (planification ou dépôt S3)
+> pourra être ajouté quand le prototype passera en usage régulier.
+
+1. **Besoin 1 – MVP** : Step Functions + superviseur, scout, rédacteur + DynamoDB (reprend le pattern
    Lambda + LangGraph existant). Puis analyste, A2A / MCP et évaluations.
 2. **Besoin 2 – Phase 1** : pipeline Step Functions, 3 modèles, contrôle des règles, DXF → décision Go / No-Go.
 3. **Besoin 2 – Phase 2** : Knowledge Base + S3 Vectors si la phase 1 est concluante.

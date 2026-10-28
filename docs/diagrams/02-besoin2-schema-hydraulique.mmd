@@ -35,7 +35,10 @@ flowchart LR
 
   NA[("Neptune Analytics<br/>équipements = noeuds<br/>connexions = arêtes")]:::db
 
-  ING --> IN --> V
+  RUN["Lancement manuel<br/>console / CLI"]:::mgmt
+  ING --> IN
+  RUN --> V
+  IN --> V
   G --> M1 & M2 & M3
   R --> KB
   COR -- "ingestion" --> KB
@@ -50,3 +53,4 @@ flowchart LR
   classDef storage fill:#7AA116,stroke:#577311,color:#fff
   classDef ext fill:#ffffff,stroke:#5A6B7B,color:#232F3E
   classDef decision fill:#FFF4E5,stroke:#ED7100,color:#232F3E
+  classDef mgmt fill:#5A6B7B,stroke:#3B4753,color:#fff

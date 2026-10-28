@@ -9,14 +9,14 @@ flowchart TB
 
   subgraph UC1["BESOIN 1  -  Prototypage multi-agents  (UseCase=uc01)"]
     direction LR
-    A1["EventBridge<br/>Scheduler"]:::integ --> A2["Step Functions"]:::integ --> A3["Lambda x6<br/>agents LangGraph"]:::compute
+    A1["Lancement manuel<br/>console / CLI / CI"]:::mgmt --> A2["Step Functions"]:::integ --> A3["Lambda x6<br/>agents LangGraph"]:::compute
     A3 --> A4["Bedrock<br/>Claude Haiku"]:::ai
     A3 --> A5[("DynamoDB<br/>mémoire")]:::db
   end
 
   subgraph UC2["BESOIN 2  -  Schéma hydraulique  (UseCase=uc02)"]
     direction LR
-    B1["Step Functions"]:::integ --> B2["Lambda x6<br/>pipeline + DXF"]:::compute
+    B0["Lancement manuel<br/>console / CLI"]:::mgmt --> B1["Step Functions"]:::integ --> B2["Lambda x6<br/>pipeline + DXF"]:::compute
     B2 --> B3["Bedrock<br/>3 modèles"]:::ai
     B2 --> B4["Knowledge Base"]:::ai
     B4 -.-> B5[("Neptune<br/>Analytics")]:::db

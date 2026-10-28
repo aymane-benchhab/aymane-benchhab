@@ -8,7 +8,7 @@ flowchart LR
 
   subgraph TRIG["Déclencheurs"]
     direction TB
-    SCH["EventBridge Scheduler<br/>tous les jours 7h"]:::integ
+    SCH["Lancement manuel<br/>console / CLI"]:::mgmt
     CI["GitLab CI<br/>tests de non-régression"]:::mgmt
   end
 
