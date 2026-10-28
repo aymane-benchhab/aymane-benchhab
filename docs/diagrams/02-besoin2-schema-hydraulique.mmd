@@ -1,47 +1,39 @@
 flowchart LR
-  ING["Ingénieur"] -->|"fiche de besoin<br/>puissance, fluide, heures"| S3IN
+  ING["Ingénieur<br/>dev en local<br/>+ accès Bedrock"] -->|"fiche de besoin<br/>puissance, fluide, heures"| IN
 
-  subgraph VPC["VPC privé  -  UseCase=uc02-hydraulic-schema"]
-    direction TB
-    S3IN[("S3 uc02/input")]
-
-    subgraph SFN["Step Functions : pipeline de génération"]
-      direction TB
-      V["1. Valider la fiche<br/>JSON Schema"]
-      R["2. Retrieve<br/>règles hydrauliques<br/>+ projets similaires"]
-      G["3. Générer schéma JSON<br/>Map : N modèles en parallèle<br/>sortie structurée tool-use"]
-      C["4. Contrôle règles métier<br/>Python déterministe"]
-      D{"Conforme ?"}
-      X["5. JSON vers CAO<br/>DXF via ezdxf<br/>Lambda conteneur"]
-      M["6. Scoring comparatif<br/>% règles OK, coût, latence"]
-      V --> R --> G --> C --> D
-      D -->|"non : erreurs renvoyées<br/>au LLM, max 3 tours"| G
-      D -->|"oui"| X --> M
-    end
-
-    NB["SageMaker Notebook<br/>dev du pipeline<br/>sans accès internet"]
-    S3C[("S3 uc02/corpus<br/>règles, docs,<br/>historique projets")]
-    S3OUT[("S3 uc02/output<br/>schema.json, .dxf,<br/>rapport comparatif")]
+  subgraph S3["S3 partagé  -  préfixe /uc02"]
+    IN[("input/")]
+    COR[("corpus/<br/>règles, historique")]
+    OUT[("output/<br/>JSON, DXF, rapport")]
   end
 
-  subgraph BR["Amazon Bedrock  -  Inference Profiles uc02"]
+  subgraph SFN["Step Functions  (socle commun)  -  UseCase=uc02"]
+    direction TB
+    V["1. Valider la fiche"]
+    R["2. Récupérer les règles<br/>et projets similaires"]
+    G["3. Générer le schéma JSON<br/>N modèles en parallèle"]
+    C["4. Contrôler les règles<br/>hydrauliques (Python)"]
+    D{"Conforme ?"}
+    X["5. Convertir en CAO<br/>DXF"]
+    M["6. Comparer les modèles"]
+    V --> R --> G --> C --> D
+    D -->|"non, max 3 fois"| G
+    D -->|"oui"| X --> M
+  end
+
+  subgraph BR["Amazon Bedrock"]
     M1["Claude Sonnet"]
     M2["Claude Haiku"]
-    M3["Amazon Nova<br/>ou autre modèle du groupe"]
-    KB["Knowledge Base<br/>Phase 1 : vecteurs S3 Vectors<br/>Phase 2 : GraphRAG"]
+    M3["Autre modèle<br/>du groupe"]
+    KB["Knowledge Base<br/>(étape 3)"]
   end
 
-  subgraph GR["Phase 2 : graphe"]
-    NA[("Neptune Analytics<br/>équipements = noeuds<br/>connexions = arêtes")]
-  end
+  NA[("Neptune Analytics<br/>GraphRAG (étape 4)")]
 
-  S3IN --> V
-  R --> KB
+  IN --> V
   G --> M1 & M2 & M3
-  S3C -->|"ingestion"| KB
-  KB <-.->|"Phase 2"| NA
-  X --> S3OUT
-  M --> S3OUT
-  X -.->|"schémas validés<br/>enrichissent le graphe"| NA
-  NB -.-> SFN
-  NB -.-> NA
+  R --> KB
+  COR --> KB
+  KB <-.-> NA
+  X --> OUT
+  M --> OUT

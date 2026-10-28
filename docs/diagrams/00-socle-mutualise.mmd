@@ -1,39 +1,41 @@
 flowchart TB
-  subgraph ACC["Compte AWS IA (existant) - eu-west-1"]
+  subgraph ACC["Compte AWS IA existant"]
     direction TB
-    subgraph SHARED["SOCLE MUTUALISÉ  -  tag UseCase=shared  (coût réparti par Cost Categories)"]
+    subgraph EXIST["Projets existants"]
       direction LR
-      NET["VPC privé<br/>VPC endpoints : bedrock-runtime,<br/>bedrock-agent-runtime, s3, kms, logs, sts"]
-      SEC["IAM Identity Center<br/>1 permission set / use-case<br/>Bedrock Guardrails<br/>Tag Policy + Config rules"]
-      LIB["Composants réutilisables<br/>lib Python 'agents-core' (GitLab registry)<br/>Lambda layer + image ECR de base<br/>wrapper Bedrock, LangGraph, A2A/MCP, évals"]
-      CI["GitLab CI templates<br/>fmt, tflint, checkov, tests, deploy"]
-      SMD["SageMaker Domain unique<br/>arrêt auto des apps inactives"]
-      FIN["FinOps : Budgets, Cost Anomaly Detection,<br/>Cost Explorer / CUR group by UseCase"]
+      TA["Trends Analysis"]
+      LG["LangGraph Agents"]
     end
 
-    subgraph UC1["Module usecase-baseline : uc01-agents-lab"]
-      direction TB
-      U1A["Tags obligatoires"]
-      U1B["KMS CMK + S3 bucket"]
-      U1C["Rôle IAM workload (ABAC)"]
-      U1D["Bedrock Application Inference Profiles<br/>(1 par modèle)"]
-      U1E["AWS Budget"]
+    subgraph SHARED["RESSOURCES PARTAGÉES"]
+      direction LR
+      NET["Réseau / VPC"]
+      CI["CI GitLab<br/>+ state Terraform"]
+      BRA["Accès Bedrock"]
+      S3["Bucket S3 partagé<br/>1 préfixe par projet<br/>/trends /langgraph /uc01 /uc02"]
+      PAT["Pattern Lambda + LangGraph"]
     end
 
-    subgraph UC2["Module usecase-baseline : uc02-hydraulic-schema"]
-      direction TB
-      U2A["Tags obligatoires"]
-      U2B["KMS CMK + S3 bucket"]
-      U2C["Rôle IAM workload (ABAC)"]
-      U2D["Bedrock Application Inference Profiles"]
-      U2E["AWS Budget"]
+    subgraph SOCLE["SOCLE COMMUN BESOINS 1 + 2  (nouveau, construit 1 fois)"]
+      direction LR
+      TAG["Tags de refacturation<br/>UseCase, CostCenter, Owner..."]
+      IAM["Rôle IAM par projet"]
+      BUD["Budget par projet"]
+      SFN["Step Functions<br/>orchestration + tests"]
     end
 
-    subgraph UCN["Module usecase-baseline : uc0N-... (prochaine demande)"]
-      UNA["même module, ~30 lignes de Terraform"]
+    subgraph UC1["Besoin 1 - spécifique"]
+      DDB["DynamoDB<br/>mémoire des agents"]
+    end
+
+    subgraph UC2["Besoin 2 - spécifique"]
+      MM["Plusieurs modèles Bedrock"]
+      KB["Knowledge Base"]
+      NA["Neptune Analytics"]
     end
   end
 
-  SHARED --> UC1
-  SHARED --> UC2
-  SHARED --> UCN
+  EXIST --> SHARED
+  SHARED --> SOCLE
+  SOCLE --> UC1
+  SOCLE --> UC2

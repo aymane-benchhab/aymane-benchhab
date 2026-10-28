@@ -1,68 +1,41 @@
 flowchart LR
-  subgraph SRC["Données publiques uniquement"]
-    HF["HuggingFace datasets<br/>benchmarks publics"]
-    AO["Appels d'offres publics<br/>TED, BOAMP, open data"]
+  subgraph SRC["Données publiques"]
+    HF["HuggingFace / benchmarks"]
+    AO["Appels d'offres publics<br/>TED, BOAMP"]
   end
 
-  subgraph ENTRY["Déclencheurs"]
+  subgraph TRIG["Déclencheurs"]
     SCH["EventBridge Scheduler<br/>scouting quotidien"]
-    API["API Gateway privée<br/>+ IAM / SSO"]
-    TST["GitLab CI<br/>tests de non-régression"]
+    TST["GitLab CI<br/>tests automatisés"]
   end
 
-  subgraph VPC["VPC privé  -  UseCase=uc01-agents-lab"]
+  subgraph ORCH["Orchestration  -  UseCase=uc01"]
     direction TB
-    SFN["Step Functions<br/>orchestration, retries,<br/>jobs > 15 min, campagnes d'évals"]
-
-    subgraph AG["Agents LangGraph sur Lambda"]
-      SUP["Superviseur<br/>routage / plan"]
-      SC["Agent Scout<br/>collecte + filtre"]
-      AN["Agent Analyste<br/>scoring Go / No-Go"]
-      RD["Agent Rédacteur<br/>fiche de synthèse"]
+    SFN["Step Functions<br/>workflow + tests"]
+    subgraph AG["Agents LangGraph sur Lambda  (pattern réutilisé)"]
+      SUP["Superviseur"]
+      SC["Agent Scout<br/>collecte"]
+      AN["Agent Analyste<br/>scoring"]
+      RD["Agent Rédacteur<br/>synthèse"]
     end
-
-    subgraph PROTO["Protocoles"]
-      A2A["A2A<br/>agent - agent"]
-      MCP["MCP servers<br/>outils : web fetch, S3, recherche"]
-    end
-
-    DDB[("DynamoDB<br/>checkpointer + mémoire")]
-    EV["Lambda Évaluateur<br/>LLM-as-judge + métriques"]
+    PROTO["Protocoles<br/>A2A entre agents<br/>MCP pour les outils"]
+    DDB[("DynamoDB<br/>mémoire des agents")]
   end
 
-  subgraph BR["Amazon Bedrock"]
-    HK["Claude Haiku (défaut MVP)<br/>via Inference Profile uc01"]
-    ALT["1-2 modèles comparés<br/>via Inference Profile uc01"]
-    GR["Guardrails"]
-  end
+  BR["Bedrock<br/>Claude Haiku"]
+  S3[("S3 partagé<br/>préfixe /uc01")]
+  WM["World models<br/>calcul à définir<br/>(hors SageMaker)"]
 
-  subgraph WM["Labo World Models"]
-    NB["SageMaker Studio<br/>JupyterLab, arrêt auto"]
-    TJ["Training / Processing Jobs<br/>Spot, GPU à la demande"]
-    MLF["MLflow managé<br/>suivi expériences"]
-  end
-
-  S3[("S3 uc01 : raw / curated /<br/>results / evals / models<br/>SSE-KMS CMK uc01")]
-  OUT["Sorties : SNS mail,<br/>rapport S3, QuickSight"]
-
-  HF --> S3
   SCH --> SFN
-  API --> SFN
   TST --> SFN
   SFN --> SUP
-  SUP <--> A2A
-  A2A <--> SC & AN & RD
-  SC --> MCP
-  MCP --> AO
+  SUP --> SC & AN & RD
+  SC & AN & RD <--> PROTO
+  SC --> AO
   SUP --- DDB
-  SUP & SC & AN & RD --> HK
-  SFN --> EV
-  EV --> ALT
-  HK --- GR
+  SUP & SC & AN & RD --> BR
+  HF --> S3
   RD --> S3
-  EV --> S3
-  S3 <--> NB
-  NB --> TJ
-  TJ --> MLF
-  TJ --> S3
-  S3 --> OUT
+  S3 -.-> WM
+
+  style WM stroke-dasharray: 5 5
