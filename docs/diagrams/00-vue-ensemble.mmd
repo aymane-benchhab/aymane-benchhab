@@ -1,0 +1,34 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Arial','fontSize':'15px','primaryColor':'#ffffff','clusterBkg':'#F7F9FB','clusterBorder':'#8C9BAB','lineColor':'#5A6B7B'}}}%%
+flowchart TB
+  subgraph SH["Partagé  -  existant"]
+    direction LR
+    VPC["VPC / réseau"]:::net
+    CI["CI GitLab"]:::mgmt
+    S3["S3 (bucket existant)<br/>préfixes /uc01 /uc02"]:::storage
+  end
+
+  subgraph UC1["BESOIN 1  -  Prototypage multi-agents  (UseCase=uc01)"]
+    direction LR
+    A1["EventBridge<br/>Scheduler"]:::integ --> A2["Step Functions"]:::integ --> A3["Lambda x6<br/>agents LangGraph"]:::compute
+    A3 --> A4["Bedrock<br/>Claude Haiku"]:::ai
+    A3 --> A5[("DynamoDB<br/>mémoire")]:::db
+  end
+
+  subgraph UC2["BESOIN 2  -  Schéma hydraulique  (UseCase=uc02)"]
+    direction LR
+    B1["Step Functions"]:::integ --> B2["Lambda x6<br/>pipeline + DXF"]:::compute
+    B2 --> B3["Bedrock<br/>3 modèles"]:::ai
+    B2 --> B4["Knowledge Base"]:::ai
+    B4 -.-> B5[("Neptune<br/>Analytics")]:::db
+  end
+
+  SH --- UC1
+  SH --- UC2
+
+  classDef compute fill:#ED7100,stroke:#B35500,color:#fff
+  classDef integ fill:#E7157B,stroke:#A80F59,color:#fff
+  classDef ai fill:#01A88D,stroke:#017A66,color:#fff
+  classDef db fill:#C925D1,stroke:#8F1A95,color:#fff
+  classDef storage fill:#7AA116,stroke:#577311,color:#fff
+  classDef net fill:#8C4FFF,stroke:#6236B3,color:#fff
+  classDef mgmt fill:#5A6B7B,stroke:#3B4753,color:#fff

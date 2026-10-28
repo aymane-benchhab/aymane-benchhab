@@ -1,5 +1,7 @@
 # Plateforme IA AWS multi-use-cases – architecture, tagging et chiffrage
 
+> ⚠️ Version initiale, remplacée par [besoins-ressources-benchmark.md](besoins-ressources-benchmark.md) (sans SageMaker, sans module commun).
+
 **Contexte.** Un compte AWS héberge déjà deux projets (`trends-analysis` : RAG, `langgraph-agents` : LangGraph).
 De nouvelles demandes RAG / agents arrivent sur le même compte, portées par des métiers différents qu'il faut
 pouvoir **refacturer séparément**.
@@ -21,7 +23,7 @@ Sommaire : [1. Socle + enveloppes](#1-optimiser--un-socle-mutualisé-et-une-enve
 
 ## 1. Optimiser : un socle mutualisé et une enveloppe par use-case
 
-![Socle mutualisé](diagrams/00-socle-mutualise.png)
+![Socle mutualisé](diagrams/00-vue-ensemble.png)
 
 Chaque nouvelle demande = **un bloc `module "usecase-baseline"`** (≈ 30 lignes, voir `terraform/live/main.tf`).
 Le module crée toujours la même enveloppe : tags, CMK KMS, bucket S3, rôle IAM ABAC,

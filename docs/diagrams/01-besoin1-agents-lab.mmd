@@ -1,41 +1,65 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Arial','fontSize':'15px','primaryColor':'#ffffff','clusterBkg':'#F7F9FB','clusterBorder':'#8C9BAB','lineColor':'#5A6B7B'}}}%%
 flowchart LR
-  subgraph SRC["Données publiques"]
-    HF["HuggingFace / benchmarks"]
-    AO["Appels d'offres publics<br/>TED, BOAMP"]
+  subgraph SRC["Sources publiques"]
+    direction TB
+    HF["HuggingFace<br/>benchmarks"]:::ext
+    AO["Appels d'offres<br/>TED, BOAMP"]:::ext
   end
 
   subgraph TRIG["Déclencheurs"]
-    SCH["EventBridge Scheduler<br/>scouting quotidien"]
-    TST["GitLab CI<br/>tests automatisés"]
-  end
-
-  subgraph ORCH["Orchestration  -  UseCase=uc01"]
     direction TB
-    SFN["Step Functions<br/>workflow + tests"]
-    subgraph AG["Agents LangGraph sur Lambda  (pattern réutilisé)"]
-      SUP["Superviseur"]
-      SC["Agent Scout<br/>collecte"]
-      AN["Agent Analyste<br/>scoring"]
-      RD["Agent Rédacteur<br/>synthèse"]
-    end
-    PROTO["Protocoles<br/>A2A entre agents<br/>MCP pour les outils"]
-    DDB[("DynamoDB<br/>mémoire des agents")]
+    SCH["EventBridge Scheduler<br/>tous les jours 7h"]:::integ
+    CI["GitLab CI<br/>tests de non-régression"]:::mgmt
   end
 
-  BR["Bedrock<br/>Claude Haiku"]
-  S3[("S3 partagé<br/>préfixe /uc01")]
-  WM["World models<br/>calcul à définir<br/>(hors SageMaker)"]
+  subgraph VPC["VPC partagé  -  UseCase = uc01-agents-lab"]
+    direction LR
+    SFN["Step Functions<br/>sfn-uc01-scouting<br/>sfn-uc01-evals"]:::integ
+
+    subgraph AG["Agents LangGraph  -  Lambda"]
+      direction TB
+      SUP["Superviseur<br/>plan + routage"]:::compute
+      SC["Scout<br/>collecte"]:::compute
+      AN["Analyste<br/>scoring Go/No-Go"]:::compute
+      RD["Rédacteur<br/>synthèse"]:::compute
+    end
+
+    MCP["Lambda MCP<br/>outils : web, S3"]:::compute
+    EV["Lambda Évaluateur<br/>LLM-as-judge"]:::compute
+    DDB[("DynamoDB<br/>checkpoints LangGraph")]:::db
+  end
+
+  subgraph BR["Amazon Bedrock"]
+    direction TB
+    HK["Claude Haiku<br/>inference profile uc01"]:::ai
+    GR["Guardrails"]:::sec
+  end
+
+  S3[("S3 /uc01<br/>raw · results · evals")]:::storage
+  SNS["SNS<br/>mail synthèse"]:::integ
+  WM["World models<br/>calcul à définir"]:::todo
 
   SCH --> SFN
-  TST --> SFN
+  CI --> SFN
   SFN --> SUP
-  SUP --> SC & AN & RD
-  SC & AN & RD <--> PROTO
-  SC --> AO
-  SUP --- DDB
-  SUP & SC & AN & RD --> BR
-  HF --> S3
+  SUP -- "A2A" --> SC & AN & RD
+  SC --> MCP --> AO
+  SUP <--> DDB
+  AG --> HK
+  HK --- GR
+  SFN --> EV --> HK
   RD --> S3
+  EV --> S3
+  HF --> S3
+  RD --> SNS
   S3 -.-> WM
 
-  style WM stroke-dasharray: 5 5
+  classDef compute fill:#ED7100,stroke:#B35500,color:#fff
+  classDef integ fill:#E7157B,stroke:#A80F59,color:#fff
+  classDef ai fill:#01A88D,stroke:#017A66,color:#fff
+  classDef db fill:#C925D1,stroke:#8F1A95,color:#fff
+  classDef storage fill:#7AA116,stroke:#577311,color:#fff
+  classDef sec fill:#DD344C,stroke:#A3263A,color:#fff
+  classDef mgmt fill:#5A6B7B,stroke:#3B4753,color:#fff
+  classDef ext fill:#ffffff,stroke:#5A6B7B,color:#232F3E
+  classDef todo fill:#ffffff,stroke:#8C9BAB,color:#5A6B7B,stroke-dasharray:6 4

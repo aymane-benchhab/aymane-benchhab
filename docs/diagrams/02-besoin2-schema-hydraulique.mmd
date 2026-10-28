@@ -1,39 +1,52 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Arial','fontSize':'15px','primaryColor':'#ffffff','clusterBkg':'#F7F9FB','clusterBorder':'#8C9BAB','lineColor':'#5A6B7B'}}}%%
 flowchart LR
-  ING["Ingénieur<br/>dev en local<br/>+ accès Bedrock"] -->|"fiche de besoin<br/>puissance, fluide, heures"| IN
+  ING["Ingénieur<br/>fiche de besoin<br/>puissance, fluide, heures"]:::ext
 
-  subgraph S3["S3 partagé  -  préfixe /uc02"]
-    IN[("input/")]
-    COR[("corpus/<br/>règles, historique")]
-    OUT[("output/<br/>JSON, DXF, rapport")]
-  end
+  subgraph VPC["VPC partagé  -  UseCase = uc02-hydraulic-schema"]
+    direction LR
+    IN[("S3 /uc02/input")]:::storage
 
-  subgraph SFN["Step Functions  (socle commun)  -  UseCase=uc02"]
-    direction TB
-    V["1. Valider la fiche"]
-    R["2. Récupérer les règles<br/>et projets similaires"]
-    G["3. Générer le schéma JSON<br/>N modèles en parallèle"]
-    C["4. Contrôler les règles<br/>hydrauliques (Python)"]
-    D{"Conforme ?"}
-    X["5. Convertir en CAO<br/>DXF"]
-    M["6. Comparer les modèles"]
-    V --> R --> G --> C --> D
-    D -->|"non, max 3 fois"| G
-    D -->|"oui"| X --> M
+    subgraph SFN["Step Functions  sfn-uc02-pipeline"]
+      direction TB
+      V["1 · Valider la fiche<br/>Lambda validate"]:::compute
+      R["2 · Récupérer règles<br/>Lambda retrieve"]:::compute
+      G["3 · Générer JSON<br/>Lambda generate<br/>Map : 1 branche / modèle"]:::compute
+      C["4 · Contrôler règles<br/>Lambda rules-check"]:::compute
+      D{"Conforme ?"}:::decision
+      X["5 · JSON → DXF<br/>Lambda conteneur ezdxf"]:::compute
+      M["6 · Comparer modèles<br/>Lambda score"]:::compute
+      V --> R --> G --> C --> D
+      D -- "non · max 3" --> G
+      D -- "oui" --> X --> M
+    end
+
+    OUT[("S3 /uc02/output<br/>schema.json · .dxf · rapport")]:::storage
+    COR[("S3 /uc02/corpus<br/>règles · projets")]:::storage
+    ECR["ECR<br/>image ezdxf"]:::compute
   end
 
   subgraph BR["Amazon Bedrock"]
-    M1["Claude Sonnet"]
-    M2["Claude Haiku"]
-    M3["Autre modèle<br/>du groupe"]
-    KB["Knowledge Base<br/>(étape 3)"]
+    direction TB
+    M1["Claude Sonnet"]:::ai
+    M2["Claude Haiku"]:::ai
+    M3["Amazon Nova<br/>ou autre modèle"]:::ai
+    KB["Knowledge Base<br/>vecteurs S3 Vectors"]:::ai
   end
 
-  NA[("Neptune Analytics<br/>GraphRAG (étape 4)")]
+  NA[("Neptune Analytics<br/>équipements = noeuds<br/>connexions = arêtes")]:::db
 
-  IN --> V
+  ING --> IN --> V
   G --> M1 & M2 & M3
   R --> KB
-  COR --> KB
-  KB <-.-> NA
+  COR -- "ingestion" --> KB
+  KB -. "phase 3 · GraphRAG" .-> NA
   X --> OUT
   M --> OUT
+  ECR -.-> X
+
+  classDef compute fill:#ED7100,stroke:#B35500,color:#fff
+  classDef ai fill:#01A88D,stroke:#017A66,color:#fff
+  classDef db fill:#C925D1,stroke:#8F1A95,color:#fff
+  classDef storage fill:#7AA116,stroke:#577311,color:#fff
+  classDef ext fill:#ffffff,stroke:#5A6B7B,color:#232F3E
+  classDef decision fill:#FFF4E5,stroke:#ED7100,color:#232F3E
